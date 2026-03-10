@@ -1,6 +1,10 @@
 """
 QuizForge v5.0 — Pyq_database.py
 Lightweight JSON-backed persistent question store with full-text search.
+
+Fixes applied:
+  BUG-06: load_questions() now uses a file-mtime cache so the JSON file is
+          only re-read from disk when it has actually changed.
 """
 
 import json
@@ -11,8 +15,12 @@ import re
 from pathlib import Path
 from typing import Optional
 
-DB_FILE = Path(os.environ.get("QUIZFORGE_DB", "questions.json"))
+DB_FILE   = Path(os.environ.get("QUIZFORGE_DB", "questions.json"))
 META_FILE = Path("meta.json")
+
+# ── In-memory cache (FIX BUG-06) ────────────────────────────────────────────
+_cache: list = []
+_cache_mtime: float = 0.0
 
 
 # ── Schema default ──────────────────────────────────────────────────────────
@@ -35,22 +43,47 @@ def _save_meta(meta: dict):
 
 # ── Core DB ops ─────────────────────────────────────────────────────────────
 def load_questions() -> list:
-    """Load all questions from disk. Returns [] if none."""
+    """
+    Load all questions from disk.
+    FIX BUG-06: Only re-reads the JSON file when DB_FILE mtime has changed.
+    All other calls return the cached list directly (no disk I/O).
+    """
+    global _cache, _cache_mtime
+
     if not DB_FILE.exists():
+        _cache = []
+        _cache_mtime = 0.0
         return []
+
+    try:
+        mtime = DB_FILE.stat().st_mtime
+    except OSError:
+        return _cache
+
+    if mtime == _cache_mtime:
+        # File unchanged — return cached list  # FIX BUG-06
+        return _cache
+
+    # File changed (or first load) — re-read from disk
     try:
         data = json.loads(DB_FILE.read_text(encoding="utf-8"))
         if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "questions" in data:
-            return data["questions"]
+            _cache = data
+        elif isinstance(data, dict) and "questions" in data:
+            _cache = data["questions"]
+        else:
+            _cache = []
+        _cache_mtime = mtime
     except Exception:
-        pass
-    return []
+        _cache = []
+
+    return _cache
 
 
 def save_questions(questions: list):
-    """Persist questions list to disk atomically."""
+    """Persist questions list to disk atomically, then invalidate cache."""
+    global _cache, _cache_mtime
+
     tmp = DB_FILE.with_suffix(".tmp")
     payload = {
         "version": "5.0",
@@ -60,6 +93,10 @@ def save_questions(questions: list):
     }
     tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     tmp.replace(DB_FILE)
+
+    # Invalidate cache so next load_questions() re-reads the new file
+    _cache_mtime = 0.0
+    _cache = []
 
     meta = _load_meta()
     meta["scraped_at"] = time.time()
@@ -74,8 +111,11 @@ def count_questions() -> int:
 
 
 def clear_questions():
+    global _cache, _cache_mtime
     if DB_FILE.exists():
         DB_FILE.unlink()
+    _cache = []
+    _cache_mtime = 0.0
     _save_meta(_default_meta())
 
 
@@ -120,11 +160,11 @@ def get_questions(
 
     total = len(pool)
     start = (page - 1) * per_page
-    end = start + per_page
+    end   = start + per_page
 
     return {
-        "total": total,
-        "page": page,
+        "total":    total,
+        "page":     page,
         "per_page": per_page,
         "questions": pool[start:end],
     }
@@ -162,13 +202,13 @@ def get_stats() -> dict:
         sources[s] = sources.get(s, 0) + 1
 
     return {
-        "total": len(qs),
-        "by_exam": exams,
-        "by_chapter": dict(sorted(chapters.items(), key=lambda x: -x[1])[:20]),
+        "total":         len(qs),
+        "by_exam":       exams,
+        "by_chapter":    dict(sorted(chapters.items(), key=lambda x: -x[1])[:20]),
         "by_difficulty": difficulties,
-        "by_year": dict(sorted(years.items(), reverse=True)[:15]),
-        "by_source": sources,
-        "meta": _load_meta(),
+        "by_year":       dict(sorted(years.items(), reverse=True)[:15]),
+        "by_source":     sources,
+        "meta":          _load_meta(),
     }
 
 

@@ -1,6 +1,12 @@
 """
 QuizForge v5.0 — app.py
 Flask backend with SSE scrape streaming, REST API, and PDF export.
+
+Fixes applied:
+  BUG-04: index() uses Path(__file__).parent so it works from any CWD
+  BUG-05: _scrape_running=False wrapped in _scrape_lock (thread safety)
+  BUG-12: is_stale() checked at startup with a console warning
+  NEW:    /api/scrape accepts {"exam":"JEE"} body param
 """
 
 import json
@@ -19,6 +25,8 @@ from scraper import scrape_all
 from Pdf_generator import generate_pdf
 
 # ─── App setup ─────────────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent  # FIX BUG-04: absolute path to this file's dir
+
 app = Flask(
     __name__,
     template_folder="templates",
@@ -29,20 +37,33 @@ app.config["COMPRESS_LEVEL"] = 6
 Compress(app)
 
 # Global scrape state
-_scrape_lock  = threading.Lock()
+_scrape_lock    = threading.Lock()
 _scrape_q: queue.Queue = queue.Queue(maxsize=2000)
 _scrape_running = False
+_scrape_exam    = "ALL"   # tracks which exam is being scraped
+
+
+# ─── Startup check ──────────────────────────────────────────────────────────
+def _startup_check():
+    """FIX BUG-12: warn if DB is empty or stale so operators know to scrape."""
+    if db.is_stale(max_age_hours=24.0):
+        print("⚠  QuizForge: Question DB is empty or stale — "
+              "click 'Fetch Live PYQ Questions' in the browser to populate it.")
+    else:
+        count = db.count_questions()
+        print(f"✅ QuizForge: Loaded {count} cached questions from DB.")
 
 
 # ─── Static files ───────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # FIX BUG-04: use BASE_DIR so this works regardless of CWD at runtime
+    return send_from_directory(str(BASE_DIR), "index.html")
 
 
 @app.route("/static/<path:path>")
 def static_files(path):
-    return send_from_directory("static", path)
+    return send_from_directory(str(BASE_DIR / "static"), path)
 
 
 # ─── Questions API ──────────────────────────────────────────────────────────
@@ -81,11 +102,17 @@ def api_stats():
 # ─── Scrape API ─────────────────────────────────────────────────────────────
 @app.route("/api/scrape", methods=["POST"])
 def api_scrape_start():
-    global _scrape_running
+    global _scrape_running, _scrape_exam
     with _scrape_lock:
         if _scrape_running:
             return jsonify({"status": "already_running"}), 202
         _scrape_running = True
+
+        # Read requested exam from POST body (NEW: exam-specific scraping)
+        body = request.get_json(force=True, silent=True) or {}
+        exam = body.get("exam", "ALL").upper()
+        _scrape_exam = exam
+
         # Drain old queue
         while not _scrape_q.empty():
             try:
@@ -97,7 +124,7 @@ def api_scrape_start():
             global _scrape_running
             all_questions = []
             try:
-                for event in scrape_all():
+                for event in scrape_all(exam=exam):
                     _scrape_q.put(event)
                     if event.get("_event") == "done":
                         all_questions = event.get("questions", [])
@@ -106,12 +133,14 @@ def api_scrape_start():
             finally:
                 if all_questions:
                     db.save_questions(all_questions)
-                _scrape_running = False
+                # FIX BUG-05: acquire lock before clearing flag (thread safety)
+                with _scrape_lock:
+                    _scrape_running = False
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
 
-    return jsonify({"status": "started"}), 202
+    return jsonify({"status": "started", "exam": exam}), 202
 
 
 @app.route("/api/scrape/stream")
@@ -119,13 +148,12 @@ def api_scrape_stream():
     """SSE endpoint — streams scrape progress to the browser."""
 
     def event_stream():
-        timeout = 300  # 5 minutes max
+        timeout = 600  # 10 minutes max (30-worker scrape can take a while)
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 event = _scrape_q.get(timeout=2)
             except queue.Empty:
-                # Heartbeat to keep connection alive
                 yield "event: heartbeat\ndata: {}\n\n"
                 if not _scrape_running:
                     break
@@ -137,7 +165,6 @@ def api_scrape_stream():
             if etype == "progress":
                 yield f"event: progress\ndata: {payload}\n\n"
             elif etype == "done":
-                # Send progress=100 then done
                 yield "event: progress\ndata: {\"pct\":100,\"msg\":\"Finalising…\"}\n\n"
                 yield f"event: done\ndata: {payload}\n\n"
                 break
@@ -158,7 +185,11 @@ def api_scrape_stream():
 
 @app.route("/api/scrape/status")
 def api_scrape_status():
-    return jsonify({"running": _scrape_running, "count": db.count_questions()})
+    return jsonify({
+        "running": _scrape_running,
+        "count": db.count_questions(),
+        "exam": _scrape_exam,
+    })
 
 
 # ─── PDF Export API ─────────────────────────────────────────────────────────
@@ -201,11 +232,13 @@ def health():
         "status": "ok",
         "questions": db.count_questions(),
         "scraping": _scrape_running,
+        "scrape_exam": _scrape_exam,
         "version": "5.0",
     })
 
 
 if __name__ == "__main__":
+    _startup_check()  # FIX BUG-12: warn if DB is empty/stale
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"🎯 QuizForge v5.0 — http://localhost:{port}")

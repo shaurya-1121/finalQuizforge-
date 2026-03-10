@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   QUIZFORGE v4.0 — app.js
+   QUIZFORGE v5.0 — app.js                          FIX BUG-01
    New: Search · Difficulty filter · Light/dark toggle ·
         30-worker SSE vis · Better mobile UX · Keyboard nav ·
-        Answer history · Streak fire effect · Smart ads
+        Answer history · Streak fire effect · Smart ads ·
+        EXAM SELECTION before scrape
 ═══════════════════════════════════════════════════════════════ */
 
 /* ── Built-in JEE numerical bank ──────────────────────────── */
@@ -29,21 +30,22 @@ const JEE_NUM = [
 /* ════════════════════════════════════════════════
    STATE
 ════════════════════════════════════════════════ */
-let allQ       = [];
-let filteredQ  = [];
-let activeQ    = [];   // after search filter
-let idx        = 0;
-let selected   = null;
-let answered   = false;
-let score      = 0;
-let streak     = 0;
-let exam       = "ALL";
-let chapter    = "ALL";
-let diff       = "ALL";
-let searchTerm = "";
-let timerSec   = 30;
-let timerInt   = null;
-let sseSource  = null;
+let allQ        = [];
+let filteredQ   = [];
+let activeQ     = [];
+let idx         = 0;
+let selected    = null;
+let answered    = false;
+let score       = 0;
+let streak      = 0;
+let exam        = "ALL";
+let chapter     = "ALL";
+let diff        = "ALL";
+let searchTerm  = "";
+let timerSec    = 30;
+let timerInt    = null;
+let sseSource   = null;
+let selectedExamForScrape = "ALL";   // NEW: exam chosen before scraping
 
 // Timer mode
 let tmLimit = 0, tmRemain = 0, tmInt = null;
@@ -52,14 +54,14 @@ let tmLimit = 0, tmRemain = 0, tmInt = null;
 let history   = [];
 let bookmarks = JSON.parse(localStorage.getItem("qf_bk") || "[]");
 
-// Wrong answers list for review
+// Wrong answers for review
 let wrongs = [];
 
 /* ════════════════════════════════════════════════
    DOM HELPERS
 ════════════════════════════════════════════════ */
 const $id = id => document.getElementById(id);
-function $$id(id){ return $id(id) }
+// BUG-08: removed dead $$id wrapper function
 
 const $load      = $id("loadScreen");
 const $loadRing  = $id("loadRing");
@@ -100,50 +102,50 @@ const $bkList    = $id("bkList");
 const $timerBar  = $id("timerBar");
 const $timerCD   = $id("timerCountdown");
 
-/* ── Theme ──────────────────────────────────────────────── */
-const _th = localStorage.getItem("qf_theme");
-if (_th === "light") document.body.classList.add("light");
+/* ── Light/dark theme ──────────────────────────────────────── */
 function toggleTheme() {
   document.body.classList.toggle("light");
   localStorage.setItem("qf_theme", document.body.classList.contains("light") ? "light" : "dark");
-  $id("btnTheme") && ($id("btnTheme").textContent = document.body.classList.contains("light") ? "🌙" : "☀");
 }
+if (localStorage.getItem("qf_theme") === "light") document.body.classList.add("light");
 
-/* ── Logging ────────────────────────────────────────────── */
-function log(msg, type = "") {
-  const el = document.createElement("div");
-  el.className = `log-line log-${type}`;
-  el.textContent = msg;
-  $loadLog.appendChild(el);
-  $loadLog.scrollTop = $loadLog.scrollHeight;
-}
+/* ── SSE log helper ────────────────────────────────────────── */
 function sseAppend(msg, cls = "") {
-  const el = document.createElement("div");
-  el.textContent = msg;
-  if (cls) el.className = cls;
-  $sseLog.appendChild(el);
+  const line = document.createElement("div");
+  line.className = "sse-log-line" + (cls ? " " + cls : "");
+  line.textContent = msg;
+  $sseLog.appendChild(line);
   $sseLog.scrollTop = $sseLog.scrollHeight;
 }
 
-/* ════════════════════════════════════════════════
-   WORKER DOTS (visual for 30 workers)
-════════════════════════════════════════════════ */
+/* ── Load-screen log ───────────────────────────────────────── */
+function log(msg, cls = "") {
+  const line = document.createElement("div");
+  line.className = "log-line" + (cls ? " " + cls : "");
+  line.textContent = msg;
+  $loadLog.appendChild(line);
+  $loadLog.scrollTop = $loadLog.scrollHeight;
+}
+
+/* ── Worker dot grid ───────────────────────────────────────── */
 function initWorkerDots() {
   const grid = $id("workerGrid");
   if (!grid) return;
   grid.innerHTML = "";
   for (let i = 0; i < 30; i++) {
     const d = document.createElement("div");
-    d.className = "worker-dot";
+    d.className = "wd";
     d.id = `wd${i}`;
     grid.appendChild(d);
   }
 }
-let _workerActive = 0;
 function activateWorker() {
-  if (_workerActive < 30) {
-    const d = $id(`wd${_workerActive++}`);
-    if (d) d.classList.add("active");
+  for (let i = 0; i < 30; i++) {
+    const d = $id(`wd${i}`);
+    if (d && !d.classList.contains("active") && !d.classList.contains("done")) {
+      d.classList.add("active");
+      return;
+    }
   }
 }
 function doneWorker(n) {
@@ -154,10 +156,49 @@ function doneWorker(n) {
 }
 
 /* ════════════════════════════════════════════════
+   EXAM SELECTION (NEW — shown on loading screen)
+════════════════════════════════════════════════ */
+const EXAM_OPTIONS = [
+  { id: "JEE",  icon: "⚛",  label: "JEE",  desc: "Physics · Chemistry · Maths" },
+  { id: "NEET", icon: "🧬", label: "NEET", desc: "Biology · Physics · Chemistry" },
+  { id: "UPSC", icon: "🏛",  label: "UPSC", desc: "GS · History · Polity · Economy" },
+  { id: "CAT",  icon: "📐",  label: "CAT",  desc: "Quant · Verbal · Logical" },
+  { id: "GK",   icon: "💡",  label: "GK",   desc: "General Knowledge · Affairs" },
+  { id: "ALL",  icon: "🎯",  label: "All",  desc: "Everything mixed" },
+];
+
+function buildExamPicker() {
+  const section = $id("examPickerSection");
+  if (section) section.style.display = "";
+  const container = $id("examPickerGrid");
+  if (!container) return;
+  container.innerHTML = EXAM_OPTIONS.map(o => `
+    <button class="ep-btn${o.id === selectedExamForScrape ? " ep-active" : ""}"
+            data-exam="${o.id}" onclick="pickExam('${o.id}', this)"
+            aria-label="Select ${o.label}" aria-pressed="${o.id === selectedExamForScrape}">
+      <span class="ep-icon">${o.icon}</span>
+      <span class="ep-label">${o.label}</span>
+      <span class="ep-desc">${o.desc}</span>
+    </button>
+  `).join("");
+}
+
+function pickExam(id, btn) {
+  selectedExamForScrape = id;
+  document.querySelectorAll(".ep-btn").forEach(b => {
+    b.classList.toggle("ep-active", b.dataset.exam === id);
+    b.setAttribute("aria-pressed", b.dataset.exam === id ? "true" : "false");
+  });
+  $fetchBtn.style.display = "flex";
+  const opt = EXAM_OPTIONS.find(o => o.id === id);
+  $fetchBtn.textContent = `🚀  Fetch ${opt ? opt.label : id} PYQ Questions`;
+}
+
+/* ════════════════════════════════════════════════
    INIT
 ════════════════════════════════════════════════ */
 async function init() {
-  log("> QuizForge v4.0 initialising…", "info");
+  log("> QuizForge v5.0 initialising…", "info");  // FIX BUG-01
   log("> Checking /api/questions…", "info");
   try {
     const res  = await fetch("/api/questions?per_page=200");
@@ -167,15 +208,16 @@ async function init() {
       setTimeout(() => launch(data.questions), 500);
     } else {
       log("> No cached questions found.", "");
-      log("> Click below to fetch live questions.", "info");
+      log("> Choose your exam below, then click Fetch.", "info");
       _stopRing();
-      $fetchBtn.style.display = "flex";
+      buildExamPicker();
+      // Don't show fetch button yet — let user pick exam first
     }
   } catch (e) {
     log(`> Server error: ${e.message}`, "err");
     log("> Make sure Flask is running: python app.py", "err");
     _stopRing();
-    $fetchBtn.style.display = "flex";
+    buildExamPicker();
   }
 }
 
@@ -188,15 +230,24 @@ function _stopRing() {
    SSE SCRAPE
 ════════════════════════════════════════════════ */
 async function startScrape() {
+  if (!selectedExamForScrape) {
+    toast("⚠ Please select an exam first.");
+    return;
+  }
   $fetchBtn.disabled = true;
   $loadRing.style.animation = "";
   $loadRing.style.opacity = "1";
 
   try {
-    const r = await fetch("/api/scrape", { method: "POST" });
+    // NEW: send selected exam in request body
+    const r = await fetch("/api/scrape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exam: selectedExamForScrape }),
+    });
     if (!r.ok && r.status !== 202) {
       const d = await r.json().catch(() => ({}));
-      log(`> ❌ ${d.message || "Failed"}`, "err");
+      log(`> ❌ ${d.error || d.msg || "Failed"}`, "err");  // FIX BUG-02
       $fetchBtn.disabled = false;
       return;
     }
@@ -208,9 +259,9 @@ async function startScrape() {
 
   initWorkerDots();
   $ssePanel.classList.add("show");
-  log("> Scrape started — 30 workers active…", "info");
+  log(`> Scrape started — fetching ${selectedExamForScrape} questions via 30 workers…`, "info");
 
-  // Animate worker dots on
+  // Animate worker dots
   let dotTimer = 0;
   for (let i = 0; i < 30; i++) {
     setTimeout(activateWorker, dotTimer);
@@ -225,7 +276,9 @@ async function startScrape() {
     $ssePct.textContent  = d.pct + "%";
     $sseMsg.textContent  = d.msg || "";
     sseAppend(d.msg || "", "info");
-    if (d.stage && d.stage.includes("done")) {
+    if (d.workers_done !== undefined) {
+      doneWorker(Math.round(30 * d.workers_done / (d.workers_total || 30)));
+    } else if (d.stage && d.stage.includes("done")) {
       doneWorker(Math.round(30 * d.pct / 100));
     }
   });
@@ -245,9 +298,9 @@ async function startScrape() {
   });
 
   sseSource.addEventListener("error", e => {
-    let msg = "Unknown error";
+    sseSource.close();  // FIX BUG-03: close FIRST before anything else
+    let msg = "Connection lost";
     try { msg = JSON.parse(e.data).msg; } catch {}
-    sseSource.close();
     sseAppend(`❌ ${msg}`, "err");
     log(`> ❌ ${msg}`, "err");
     $fetchBtn.disabled = false;
@@ -258,7 +311,11 @@ async function startScrape() {
    LAUNCH
 ════════════════════════════════════════════════ */
 function launch(questions) {
-  allQ = [...questions, ...JEE_NUM];
+  // FIX BUG-07: deduplicate JEE_NUM against server questions by question text
+  const existingTexts = new Set(questions.map(q => q.question));
+  const uniqueLocal   = JEE_NUM.filter(q => !existingTexts.has(q.question));
+  allQ = [...questions, ...uniqueLocal];
+
   $load.classList.remove("show");
   buildTabs();
   buildChapterDropdown();
@@ -268,7 +325,7 @@ function launch(questions) {
   $id("dlHdrBtn").style.display = "flex";
 
   const sources = [...new Set(allQ.map(q => q.source).filter(Boolean))];
-  const label = `LIVE — ${sources.length ? sources.slice(0,3).join(" · ") : "ExamSIDE + PW Live + IndiaBix"}`;
+  const label = `LIVE — ${sources.length ? sources.slice(0,3).join(" · ") : "ExamSIDE + pyqs.org + IndiaBix"}`;
   $id("srcLabel").textContent = label;
 }
 
@@ -317,6 +374,7 @@ function onDiff()    { diff    = $diffSel.value||"ALL";    applyFilters(); }
 function onSearch(v) { searchTerm = v.toLowerCase().trim(); applyFilters(); }
 
 function applyFilters() {
+  clearInterval(timerInt); // SUGGESTION-03: clear per-question timer on filter change
   let pool = exam==="ALL" ? [...allQ] : allQ.filter(q=>q.exam===exam);
   if (chapter !== "ALL") pool = pool.filter(q=>(q.chapter||"General")===chapter);
   if (diff    !== "ALL") pool = pool.filter(q=>q.difficulty===diff);
@@ -620,7 +678,6 @@ function toggleBk(e, btn) {
 function showBookmarks() {
   $bkPanel.classList.toggle("show");
   if (!$bkPanel.classList.contains("show")) return;
-
   const list = allQ.filter(q => bookmarks.includes(bkKey(q)));
   if (!list.length) {
     $bkList.innerHTML = '<div class="bm-empty">No saved questions yet. Click 🔖 on any question!</div>';
@@ -707,8 +764,9 @@ function confirmRefresh() {
   $loadLog.innerHTML = "";
   $loadRing.style.animation = ""; $loadRing.style.opacity = "1";
   $fetchBtn.disabled = false;
-  $fetchBtn.style.display = "flex";
-  log("> Ready to re-fetch…","info");
+  selectedExamForScrape = "ALL";
+  buildExamPicker();
+  log("> Choose your exam and re-fetch…","info");
 }
 
 /* ════════════════════════════════════════════════
@@ -799,7 +857,7 @@ function _printPDF() {
   @media print{body{margin:16px}}
 </style></head><body>
 <h1>🎯 QuizForge — ${examTag}</h1>
-<div class="meta">Generated: ${new Date().toLocaleString()} · ${filteredQ.length} Questions · QuizForge v4.0</div>`;
+<div class="meta">Generated: ${new Date().toLocaleString()} · ${filteredQ.length} Questions · QuizForge v5.0</div>`;
   filteredQ.forEach((q,i)=>{
     html += `<div class="qb"><div class="qn">Q${i+1} · ${q.exam||""} · ${q.difficulty||""} · ${q.year||""} · ${q.chapter||""}</div>
 <div class="qt">${escapeHTMLStr(q.question)}</div>`;

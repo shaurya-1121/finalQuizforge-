@@ -112,6 +112,11 @@
         <p class="loading-sub">Checking cached question bank…</p>
       </div>
       <div class="log-box" id="loadLog" aria-label="Loading log"></div>
+      <!-- Exam Selection Picker (shown when no cached questions) -->
+      <div class="exam-picker" id="examPickerSection" style="display:none">
+        <div class="ep-title">📚 What do you want to study?</div>
+        <div class="ep-grid" id="examPickerGrid" role="radiogroup" aria-label="Select exam"></div>
+      </div>
       <button class="fetch-btn" id="fetchBtn" style="display:none" onclick="startScrape()" aria-label="Fetch questions">
         🚀 &nbsp;Fetch Live PYQ Questions
       </button>
