@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+  <meta name="theme-color" content="#080612"/>
+  <meta name="description" content="QuizForge — Premium PYQ Practice Engine for JEE, NEET, UPSC, CAT, SAT & GK"/>
+  <title>QuizForge — Premium PYQ Engine v5</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,700&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <svg class="ring-grad-defs" aria-hidden="true"><defs><linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#A78BFA"/><stop offset="50%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#F97316"/></linearGradient></defs></svg>
+</head>
+<body>
+  <!-- Ambient orbs -->
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <audio id="audioEl" preload="none"></audio>
+
+  <!-- ══════════════ DOWNLOAD MODAL ══════════════ -->
+  <div class="modal-ov" id="dlModal" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-title">⬇ Export Questions</div>
+      <div class="modal-sub">Choose your export format</div>
+      <div class="modal-opts">
+        <button class="modal-opt" onclick="dlJSON()">
+          <span class="modal-opt-icon">📄</span>
+          <div>
+            <div class="modal-opt-title">JSON</div>
+            <div class="modal-opt-desc">Full data with answers & explanations</div>
+          </div>
+        </button>
+        <button class="modal-opt" onclick="dlCSV()">
+          <span class="modal-opt-icon">📊</span>
+          <div>
+            <div class="modal-opt-title">CSV</div>
+            <div class="modal-opt-desc">Spreadsheet compatible format</div>
+          </div>
+        </button>
+        <button class="modal-opt" onclick="dlPDF()">
+          <span class="modal-opt-icon">🖨</span>
+          <div>
+            <div class="modal-opt-title">Print / PDF</div>
+            <div class="modal-opt-desc">Printable question paper with answer key</div>
+          </div>
+        </button>
+      </div>
+      <button class="modal-cancel" onclick="closeDL()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ══════════════ WA GATE MODAL ══════════════ -->
+  <div class="modal-ov" id="waModal" role="dialog" aria-modal="true">
+    <div class="modal" style="text-align:center">
+      <div class="wa-icon">📲</div>
+      <div class="modal-title">Share to Unlock PDF</div>
+      <div class="modal-sub">A WhatsApp share window opened. After sharing, your PDF is ready.</div>
+      <button class="fetch-btn" id="waContinueBtn" onclick="onWaContinue()" disabled style="width:100%;justify-content:center;margin-bottom:12px">
+        Waiting…
+      </button>
+      <div class="wa-prog-track"><div class="wa-prog-fill" id="waFill"></div></div>
+      <button class="modal-cancel" onclick="closeWA()" style="margin-top:12px">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ══════════════ MAIN ══════════════ -->
+  <div class="wrap">
+
+    <!-- HEADER -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true">🎯</div>
+        <div>
+          <div class="logo-name">QuizForge</div>
+          <span class="logo-ver">Premium PYQ Engine · v5.0</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="pill" title="Questions loaded">
+          <span>Qs</span><span class="pill-val" id="totalCount">—</span>
+        </div>
+        <div class="pill" title="Your score">
+          <span>Score</span><span class="pill-val" id="scoreVal">0</span>
+        </div>
+        <div class="pill pill-streak" title="Correct streak">
+          <span>🔥</span><span class="pill-val" id="streakVal">0</span>
+        </div>
+        <button class="btn-icon" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">☀</button>
+        <button class="btn-dl-hdr" id="dlHdrBtn" onclick="openDL()" aria-label="Download">⬇ Export</button>
+      </div>
+    </header>
+
+    <!-- SSE PROGRESS -->
+    <div class="sse-panel" id="ssePanel" role="status" aria-live="polite">
+      <div class="sse-header">
+        <div class="sse-title">🚀 Live Scraping — 30 Workers</div>
+        <span class="sse-pct" id="ssePct">0%</span>
+      </div>
+      <div class="sse-msg" id="sseMsg">Initialising…</div>
+      <div class="sse-track"><div class="sse-fill" id="sseFill"></div></div>
+      <!-- 30 worker dots -->
+      <div class="worker-grid" id="workerGrid" aria-hidden="true"></div>
+      <div class="sse-log" id="sseLog"></div>
+    </div>
+
+    <!-- LOADING SCREEN -->
+    <div class="loading show" id="loadScreen" role="status" aria-live="polite">
+      <div class="ring" id="loadRing" aria-label="Loading"></div>
+      <div>
+        <div class="loading-title">Initialising QuizForge</div>
+        <p class="loading-sub">Checking cached question bank…</p>
+      </div>
+      <div class="log-box" id="loadLog" aria-label="Loading log"></div>
+      <button class="fetch-btn" id="fetchBtn" style="display:none" onclick="startScrape()" aria-label="Fetch questions">
+        🚀 &nbsp;Fetch Live PYQ Questions
+      </button>
+    </div>
+
+    <!-- QUIZ AREA -->
+    <div class="quiz" id="quizArea" aria-label="Quiz area">
+
+      <!-- Source bar -->
+      <div class="src-bar">
+        <div class="src-tag">
+          <div class="live-dot" aria-hidden="true"></div>
+          <span id="srcLabel">Connecting…</span>
+        </div>
+        <div class="src-actions">
+          <button class="btn-sm" onclick="showBookmarks()" aria-label="Bookmarks">🔖 Saved</button>
+          <button class="btn-sm" id="searchToggleBtn" onclick="toggleSearch()" aria-label="Search">🔍 Search</button>
+          <button class="btn-sm" onclick="confirmRefresh()" aria-label="Refresh">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Search bar (hidden by default) -->
+      <div class="search-wrap" id="searchWrap" style="display:none">
+        <span class="search-icon">🔍</span>
+        <input
+          class="search-input" id="searchInput" type="text"
+          placeholder="Search questions…" autocomplete="off"
+          oninput="onSearch(this.value)" aria-label="Search questions"
+        />
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-row">
+        <div class="fg">
+          <div class="fg-label">Exam</div>
+          <div class="tabs" id="examTabs" role="tablist"></div>
+        </div>
+        <div class="fg">
+          <div class="fg-label">Chapter</div>
+          <select class="filter-sel" id="chapterSel" onchange="onChapter()" aria-label="Chapter filter">
+            <option value="ALL">All Chapters</option>
+          </select>
+        </div>
+        <div class="fg">
+          <div class="fg-label">Difficulty</div>
+          <select class="filter-sel" id="diffSel" onchange="onDiff()" aria-label="Difficulty filter">
+            <option value="ALL">All Levels</option>
+            <option value="Easy">Easy</option>
+            <option value="Medium">Medium</option>
+            <option value="Hard">Hard</option>
+          </select>
+        </div>
+        <div class="fg">
+          <div class="fg-label">Timer</div>
+          <select class="filter-sel" id="timerSel" onchange="onTimerMode()" aria-label="Timer mode">
+            <option value="0">Off</option>
+            <option value="10">10 min</option>
+            <option value="30">30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Timer mode bar -->
+      <div class="timer-bar" id="timerBar" role="timer" aria-live="polite">
+        <div>
+          <div style="font-size:.72rem;color:var(--txt-3)" id="timerLabel">Timer Mode</div>
+          <div class="timer-countdown" id="timerCountdown">00:00</div>
+        </div>
+        <div class="timer-info">Answer as many as you can!</div>
+        <button class="btn-sm" onclick="stopTimerMode()">Stop ✕</button>
+      </div>
+
+      <!-- Progress -->
+      <div class="prog-wrap">
+        <div class="prog-info">
+          <span class="prog-label" id="progLabel">Q 0 / 0</span>
+          <span class="prog-pct" id="progPct">0%</span>
+        </div>
+        <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+      </div>
+
+      <!-- Mini chart -->
+      <div class="chart-wrap" id="chartWrap">
+        <div class="chart-head">
+          <div class="chart-title">📈 Last 10 Answers</div>
+          <div class="chart-legend">
+            <div class="leg"><div class="leg-dot" style="background:var(--green)"></div><span style="color:var(--txt-3);font-size:.58rem;font-family:'JetBrains Mono',monospace">Correct</span></div>
+            <div class="leg"><div class="leg-dot" style="background:var(--red)"></div><span style="color:var(--txt-3);font-size:.58rem;font-family:'JetBrains Mono',monospace">Wrong</span></div>
+          </div>
+        </div>
+        <div class="chart-bars" id="chartBars"></div>
+      </div>
+
+      <!-- Bookmarks panel -->
+      <div class="bookmarks" id="bkPanel">
+        <div class="bm-head">
+          <div class="bm-title">🔖 Saved Questions</div>
+          <button class="btn-icon" onclick="$id('bkPanel').classList.remove('show')" aria-label="Close">✕</button>
+        </div>
+        <div id="bkList"></div>
+      </div>
+
+      <!-- QUESTION CARD -->
+      <div id="qCard" class="q-card" style="display:none" role="main" aria-label="Question">
+        <div class="q-num" id="qNum"></div>
+        <div class="q-meta" id="qMeta" aria-label="Metadata"></div>
+        <div class="q-text" id="qText" role="heading" aria-level="2"></div>
+
+        <div id="ansArea" aria-label="Answer area"></div>
+        <div id="adArea"></div>
+
+        <div class="exp" id="expBox" aria-live="polite">
+          <div class="exp-label">💡 Explanation</div>
+          <div class="exp-body" id="expBody"></div>
+          <div class="exp-ans" id="expAns" style="display:none"></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn-check" id="btnCheck" disabled onclick="checkAnswer()" aria-label="Check answer">✓ Check Answer</button>
+          <button class="btn-next" id="btnNext" style="display:none" onclick="nextQ()" aria-label="Next question">Next →</button>
+          <button class="btn-skip" id="btnSkip" onclick="skipQ()" aria-label="Skip">Skip</button>
+        </div>
+        <div class="q-counter" id="qCounter"></div>
+      </div>
+
+      <!-- RESULTS -->
+      <div class="results" id="resultsBox" role="region" aria-label="Results">
+        <span class="res-emoji" id="resEmoji" aria-hidden="true"></span>
+        <div class="res-title" id="resTitle"></div>
+        <div class="res-sub" id="resSub"></div>
+
+        <div class="ring-wrap" aria-hidden="true">
+          <svg class="ring-svg" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="50"/>
+            <circle class="ring-arc" id="ringArc" cx="60" cy="60" r="50"/>
+          </svg>
+          <div class="ring-inner">
+            <div class="ring-n" id="ringN">0</div>
+            <div class="ring-l">Correct</div>
+          </div>
+        </div>
+
+        <div class="stats-row" id="statsRow"></div>
+        <div>
+          <button class="btn-restart" onclick="restartQuiz()">↺ Play Again</button>
+          <button class="btn-dl-res" onclick="openDL()">⬇ Export</button>
+        </div>
+      </div>
+
+    </div><!-- /quiz -->
+  </div><!-- /wrap -->
+
+  <!-- MUSIC PLAYER -->
+  <div class="player" role="complementary" aria-label="Music player">
+    <div class="disc-wrap">
+      <div class="disc" id="disc" aria-hidden="true">🎵</div>
+      <div class="disc-hole" aria-hidden="true"></div>
+    </div>
+    <div class="track-info">
+      <div class="track-name" id="tName">Lo-Fi Study Beats</div>
+      <div class="track-src" id="tSrc">Select to play</div>
+    </div>
+    <div class="eq" id="eq" aria-hidden="true">
+      <div class="eq-b"></div><div class="eq-b"></div>
+      <div class="eq-b"></div><div class="eq-b"></div>
+      <div class="eq-b"></div>
+    </div>
+    <div class="p-ctrl">
+      <button class="p-btn" onclick="prevTrack()" aria-label="Previous">⏮</button>
+      <button class="p-btn play" id="playBtn" onclick="playPause()" aria-label="Play / Pause">▶</button>
+      <button class="p-btn" onclick="nextTrack()" aria-label="Next">⏭</button>
+    </div>
+    <div class="vol-wrap" aria-label="Volume">
+      <span class="vol-icon" aria-hidden="true">🔊</span>
+      <input class="vol-slider" type="range" id="volSlider" min="0" max="100" value="50"
+             oninput="setVol(this.value)" aria-label="Volume"/>
+    </div>
+    <span class="p-status" id="pStatus">READY</span>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
